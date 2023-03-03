@@ -1,6 +1,5 @@
 """
-目的：输入数据集和epoch之后开始训练，训练五轮，然后把问题图片剔除出来
-保存五个权重，五个log
+
 """
 # train.py
 import os
@@ -60,7 +59,7 @@ def train2train_val(train_path, ratio=0.2):
 
 def train(class_num, epochs, train_loader, valid_loader, val_dataset_num, test_loader, test_dataset_num, log_path,
           weights_save_path,
-          pre_weights_path=None, use_conf_penalty=False):
+          pre_weights_path=None):
     # resnet18
     net = ResNet(BasicBlock, [2, 2, 2, 2],
                  num_classes=class_num)  ############################################################################
@@ -81,8 +80,8 @@ def train(class_num, epochs, train_loader, valid_loader, val_dataset_num, test_l
     test_pre_record = []
 
     # 开始进行训练和测试，训练一轮，测试一轮
-    if use_conf_penalty:
-        conf_penalty = NegEntropy()
+    # if use_conf_penalty:
+    #     conf_penalty = NegEntropy()
     best_valid_epoch = 0
     save_path_1 = f'{weights_save_path}/normal.pth'
     for epoch in range(epochs):
@@ -102,11 +101,12 @@ def train(class_num, epochs, train_loader, valid_loader, val_dataset_num, test_l
             images, labels = data
             optimizer.zero_grad()
             _, outputs = net(images.to(device))
-            if use_conf_penalty:
-                penalty = conf_penalty(outputs)
-                loss = loss_function(outputs, labels.to(device)) + penalty
-            else:
-                loss = loss_function(outputs, labels.to(device))
+            # if use_conf_penalty:
+            #     penalty = conf_penalty(outputs)
+            #     loss = loss_function(outputs, labels.to(device)) + penalty
+            # else:
+            #     loss = loss_function(outputs, labels.to(device))
+            loss = loss_function(outputs, labels.to(device))
             # print(f"***{epoch+1}-{step + 1}:  loss is {loss}")
             # print(f"模型输出是：{outputs}, label是：{labels.to(device)},求出的loss是{loss}")
             # labels.to(device)意思是把数据copy一份到device上，这里的device是上面判断过的，如果有gpu就用gpu，如果没有就用cpu
@@ -177,8 +177,8 @@ def train(class_num, epochs, train_loader, valid_loader, val_dataset_num, test_l
         f.write(f'test_pre_record:{test_pre_record}\n')
 
 
-def remove_bad(model, data_path, class_indict, dst_path):
-    bad_image_path_list = []
+def remove_bad(model, data_path, class_indict, dst_path, src_data_path):
+    # 先拷贝
     dst_dir_path_1 = f"{dst_path}/bad"
     dst_dir_path_2 = f"{dst_path}/train_src"
     os.makedirs(dst_dir_path_1, exist_ok=True)
@@ -218,15 +218,43 @@ def remove_bad(model, data_path, class_indict, dst_path):
                     # print(
                     #     f"这张图标签为{cls_dir}，模型检测结果为{class_indict[str(predict_cla)]}，且置信度为{output[predict_cla]}>{confident_threshold_1}")
                     dst_path = f"{dst_dir_path_1}/{image}"
-                    bad_image_path_list.append(image_path)
+                    # bad_image_path_list.append(image_path)
                 elif output[predict_cla] < confident_threshold_2:
                     # print({
                     #     f"这张图的标签为{cls_dir}，置信度为{output[predict_cla]}<{confident_threshold_2}"})
                     dst_path = f"{dst_dir_path_1}/{image}"
-                    bad_image_path_list.append(image_path)
+                    # bad_image_path_list.append(image_path)
                 else:
                     dst_path = f"{dst_dir_path_2}/{cls_dir}/{image}"
                 shutil.copy(image_path, dst_path)
+
+    # 记录对原本的效果
+    bad_image_path_list = []
+    for cls_dir in os.listdir(src_data_path):
+        cls_dir_path = os.path.join(src_data_path, cls_dir)
+        cls_images_list = tqdm(os.listdir(cls_dir_path))
+        all_num = 0
+        for image in cls_images_list:
+            all_num += 1
+            image_path = os.path.join(cls_dir_path, image)
+            img = Image.open(image_path)
+
+            img = data_transform(img)
+
+            img = torch.unsqueeze(img, dim=0)
+
+            with torch.no_grad():
+                # predict class
+                _, output = model(img.to(device))
+                output = torch.squeeze(output)
+                predict_cla = torch.argmax(output).cpu().numpy()
+                # 错的置信度还高
+                if class_indict[str(predict_cla)] != cls_dir and output[predict_cla] > confident_threshold_1:
+                    bad_image_path_list.append(image_path)
+                elif output[predict_cla] < confident_threshold_2:
+                    bad_image_path_list.append(image_path)
+
+
     return bad_image_path_list
 
 
@@ -240,12 +268,12 @@ if __name__ == '__main__':
                                          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-    dataset_path = r'E:\pycharmproject\cleantest\data\棱边'
+    dataset_path = r'E:\pycharmproject\cleantest\data\棱边2'
     project_name = '棱边'
     batch_size = 32
     epochs = 200
     train_num = 5
-    all_save_path = f'runs_{project_name}_1'
+    all_save_path = f'runs_{project_name}_2'
     os.makedirs(f"{all_save_path}/json", exist_ok=True)
     os.makedirs(f"{all_save_path}/log", exist_ok=True)
     os.makedirs(f"{all_save_path}/weights", exist_ok=True)
@@ -270,6 +298,7 @@ if __name__ == '__main__':
     with open(json_path, 'w') as json_file:
         json_file.write(json_str)
     train_output_save_path = dataset_path
+    dataset_path_new = dataset_path
     print(f"训练即将开始...")
     time.sleep(3)
     # 五次挑选出问题图片
@@ -278,14 +307,14 @@ if __name__ == '__main__':
         weights_save_path = f"{all_save_path}/weights/{project_name}_{train_idx}"
         os.makedirs(weights_save_path, exist_ok=True)
         log_path = f'{all_save_path}/log/{project_name}_cleantest_{epochs}epochs_{train_idx}.txt'
-        train_dataset = datasets.ImageFolder(root=dataset_path + "/train",
+        train_dataset = datasets.ImageFolder(root=dataset_path_new + "/train",
                                              transform=data_transform)
         train_dataset_num = len(train_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset,
                                                    batch_size=batch_size, shuffle=True,
                                                    num_workers=0)
 
-        validate_dataset = datasets.ImageFolder(root=dataset_path + "/val",
+        validate_dataset = datasets.ImageFolder(root=dataset_path_new + "/val",
                                                 transform=data_transform)
         val_dataset_num = len(validate_dataset)
         valid_loader = torch.utils.data.DataLoader(validate_dataset,
@@ -303,8 +332,10 @@ if __name__ == '__main__':
         # load model weights
         model_weight_path = f'{weights_save_path}/normal.pth'
         model.load_state_dict(torch.load(model_weight_path))
-        dataset_path = f"{train_output_save_path}/train_{train_idx}"
-        bad_image_path_list = remove_bad(model, src_train_path, class_indict, dataset_path)
+        dataset_train_path = f"{dataset_path_new}/train_src"
+        dataset_path_new = f"{train_output_save_path}/train_{train_idx}"
+        # bad_image_path_list = remove_bad(model, src_train_path, class_indict, dataset_path)
+        bad_image_path_list = remove_bad(model, dataset_train_path, class_indict, dataset_path_new, src_data_path=src_train_path)
         print(bad_image_path_list)
         for image_path in bad_image_path_list:
             if image_path in bad_pic_path_and_bad_score:
@@ -319,7 +350,7 @@ if __name__ == '__main__':
         print(f"第{train_idx}次训练的问题图片已经剔除，正在准备划分下次训练的数据集...")
         time.sleep(3)
         # 将新的划分成train和val，然后把训练地址更新
-        train_path = f"{dataset_path}/train_src"
+        train_path = f"{dataset_path_new}/train_src"
         train2train_val(train_path)
         print(f"下次训练的数据集已经划分好，正在准备进行下一次训练...")
         time.sleep(3)
